@@ -1,0 +1,14 @@
+"""
+Local configuration override (optional).
+
+Copy this file to config_local.py and fill in your actual credentials.
+This file is .gitignored and will not be committed.
+"""
+
+# Tiger Broker API Credentials (real values)
+TIGER_ID = "your_actual_tiger_id"
+ACCOUNT_ID = "your_actual_17_digit_account"
+PRIVATE_KEY_PATH = "./keys/rsa_private_key.pem"
+
+# Override any other settings from config.py as needed
+SANDBOX_MODE = True
