@@ -10,22 +10,28 @@ import argparse
 import logging
 import sys
 import time
+import signal
 from pathlib import Path
 from datetime import datetime
 
-from .config import (
-    TIGER_ID, ACCOUNT_ID, PRIVATE_KEY_PATH, SANDBOX_MODE,
-    LOG_LEVEL, LOG_DIR, WS_ENABLED
+from config import (
+    TIGER_ID,
+    ACCOUNT_ID,
+    PRIVATE_KEY_PATH,
+    SANDBOX_MODE,
+    LOG_LEVEL,
+    LOG_DIR,
+    WS_ENABLED,
 )
 from .data import TigerDataFetcher
 from .trader import PaperTrader
-from .strategies import (
-    GapTradingStrategy, MovingAverageCrossoverStrategy, TradeSignal
-)
+from .strategies import GapTradingStrategy, MovingAverageCrossoverStrategy, TradeSignal
 
 
 def setup_logging(log_level: str = LOG_LEVEL, log_dir: str = LOG_DIR):
-    """Configure logging to file and console."""
+    """Configure structured logging with rotation to file and console."""
+    import logging.handlers
+
     log_dir_path = Path(log_dir)
     log_dir_path.mkdir(exist_ok=True)
 
@@ -33,13 +39,16 @@ def setup_logging(log_level: str = LOG_LEVEL, log_dir: str = LOG_DIR):
 
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
 
+    # Use a structured format, e.g. adding module and line number
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        "%(asctime)s - [%(levelname)s] - %(name)s:%(lineno)d - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # File handler
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    # Rotating File handler (10 MB per file, keep last 5 files)
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
     file_handler.setLevel(numeric_level)
     file_handler.setFormatter(formatter)
 
@@ -51,6 +60,11 @@ def setup_logging(log_level: str = LOG_LEVEL, log_dir: str = LOG_DIR):
     # Root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(numeric_level)
+
+    # Remove existing handlers if re-configured
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
 
@@ -66,42 +80,34 @@ def parse_args():
         "--strategy",
         choices=["gap", "ma"],
         default="gap",
-        help="Trading strategy to use"
+        help="Trading strategy to use",
     )
     parser.add_argument(
         "--symbols",
         type=str,
         default="AAPL,TSLA,SPY",
-        help="Comma-separated list of symbols to trade"
+        help="Comma-separated list of symbols to trade",
     )
     parser.add_argument(
         "--sandbox",
         action="store_true",
         default=SANDBOX_MODE,
-        help="Run in paper trading (sandbox) mode"
+        help="Run in paper trading (sandbox) mode",
     )
     parser.add_argument(
-        "--tiger-id",
-        type=str,
-        default=TIGER_ID,
-        help="Tiger Developer ID"
+        "--tiger-id", type=str, default=TIGER_ID, help="Tiger Developer ID"
     )
     parser.add_argument(
-        "--account-id",
-        type=str,
-        default=ACCOUNT_ID,
-        help="Paper trading account ID"
+        "--account-id", type=str, default=ACCOUNT_ID, help="Paper trading account ID"
     )
     parser.add_argument(
         "--key-path",
         type=str,
         default=PRIVATE_KEY_PATH,
-        help="Path to RSA private key (.pem)"
+        help="Path to RSA private key (.pem)",
     )
     parser.add_argument(
-        "--no-websocket",
-        action="store_true",
-        help="Disable WebSocket streaming"
+        "--no-websocket", action="store_true", help="Disable WebSocket streaming"
     )
 
     # Strategy-specific parameters
@@ -109,19 +115,13 @@ def parse_args():
         "--gap-threshold",
         type=float,
         default=0.02,
-        help="Gap threshold (percentage, default 2%%)"
+        help="Gap threshold (percentage, default 2%%)",
     )
     parser.add_argument(
-        "--fast",
-        type=int,
-        default=10,
-        help="Fast MA period for MA strategy"
+        "--fast", type=int, default=10, help="Fast MA period for MA strategy"
     )
     parser.add_argument(
-        "--slow",
-        type=int,
-        default=50,
-        help="Slow MA period for MA strategy"
+        "--slow", type=int, default=50, help="Slow MA period for MA strategy"
     )
 
     return parser.parse_args()
@@ -133,17 +133,11 @@ def create_strategy(args, data_fetcher: TigerDataFetcher, trader: PaperTrader):
     strategy_name = args.strategy
 
     if strategy_name == "gap":
-        params = {
-            "gap_threshold_pct": args.gap_threshold,
-            "hold_period_bars": 10
-        }
+        params = {"gap_threshold_pct": args.gap_threshold, "hold_period_bars": 10}
         strategy = GapTradingStrategy(symbols, data_fetcher, trader, params)
 
     elif strategy_name == "ma":
-        params = {
-            "fast_period": args.fast,
-            "slow_period": args.slow
-        }
+        params = {"fast_period": args.fast, "slow_period": args.slow}
         strategy = MovingAverageCrossoverStrategy(symbols, data_fetcher, trader, params)
 
     else:
@@ -182,14 +176,14 @@ def main():
         tiger_id=args.tiger_id,
         account_id=args.account_id,
         private_key_path=args.key_path,
-        sandbox=args.sandbox
+        sandbox=args.sandbox,
     )
 
     trader = PaperTrader(
         tiger_id=args.tiger_id,
         account_id=args.account_id,
         private_key_path=args.key_path,
-        sandbox=args.sandbox
+        sandbox=args.sandbox,
     )
 
     # Connect
@@ -215,6 +209,13 @@ def main():
         data_fetcher.start_websocket(symbols)
         logger.info(f"📡 WebSocket started for {len(symbols)} symbols")
 
+    def signal_handler(sig, frame):
+        logger.info(f"\n🛑 Received signal {sig}, shutting down...")
+        cleanup_and_exit(data_fetcher, trader, logger)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # Main loop
     logger.info("🚀 Bot is running. Press Ctrl+C to stop.")
     try:
@@ -226,16 +227,20 @@ def main():
 
             try:
                 summary = trader.get_account_summary()
-                logger.info(f"💰 Account: Nav=${summary['net_liquidation']:.2f}, "
-                          f"Cash=${summary['cash_balance']:.2f}, "
-                          f"DayP&L=${summary['daily_pnl']:.2f}")
+                logger.info(
+                    f"💰 Account: Nav=${summary['net_liquidation']:.2f}, "
+                    f"Cash=${summary['cash_balance']:.2f}, "
+                    f"DayP&L=${summary['daily_pnl']:.2f}"
+                )
 
                 positions = trader.get_open_positions()
                 if positions:
                     logger.info(f"📊 Positions:")
                     for pos in positions.values():
-                        logger.info(f"   {pos.symbol}: {pos.quantity} @ ${pos.avg_cost:.2f} "
-                                  f"(P&L: ${pos.unrealized_pnl:.2f})")
+                        logger.info(
+                            f"   {pos.symbol}: {pos.quantity} @ ${pos.avg_cost:.2f} "
+                            f"(P&L: ${pos.unrealized_pnl:.2f})"
+                        )
 
             except Exception as e:
                 logger.error(f"Error in status update: {e}")
@@ -243,11 +248,26 @@ def main():
             time.sleep(60)
 
     except KeyboardInterrupt:
-        logger.info("\n🛑 Shutting down...")
-    finally:
-        data_fetcher.disconnect()
-        trader.disconnect()
-        logger.info("✅ Shutdown complete")
+        logger.info("\n🛑 Keyboard interrupt received, shutting down...")
+        cleanup_and_exit(data_fetcher, trader, logger)
+
+
+def cleanup_and_exit(data_fetcher, trader, logger):
+    """Gracefully cancel open orders and disconnect."""
+    logger.info("🧹 Cancelling all active orders...")
+    try:
+        active_orders = trader.get_active_orders()
+        for order in active_orders:
+            logger.info(f"Cancelling order {order.id} for {order.symbol}...")
+            trader.cancel_order(order.id)
+    except Exception as e:
+        logger.error(f"Error during order cleanup: {e}")
+
+    logger.info("Disconnecting from API...")
+    data_fetcher.disconnect()
+    trader.disconnect()
+    logger.info("✅ Shutdown complete")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
