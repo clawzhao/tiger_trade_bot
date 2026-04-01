@@ -1,0 +1,12 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tiger-trade-bot-config
+data:
+  LOG_LEVEL: "INFO"
+  LOG_DIR: "/var/log/tiger_bot"
+  HEALTH_PORT: "8080"
+  METRICS_PORT: "9090"
+  DATABASE_URL: "sqlite:///data/trades.db"
+  SANDBOX_MODE: "True"

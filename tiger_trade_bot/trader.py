@@ -28,6 +28,7 @@ from config import (
     TIGER_ID, ACCOUNT_ID, PRIVATE_KEY_PATH, SANDBOX_MODE,
     MAX_POSITION_SIZE, DAILY_LOSS_LIMIT, MAX_ORDER_RETRIES
 )
+from .metrics import increment_trade, update_position_risk, clear_position_risk
 
 logger = logging.getLogger(__name__)
 
@@ -180,17 +181,21 @@ class PaperTrader:
 
             self._trade_client = TradeClient(client_config)
 
-            account_info = self._trade_client.get_account_info(self.account_id)
+            from .metrics import measure_latency
+            with measure_latency("get_account_info"):
+                account_info = self._trade_client.get_account_info(self.account_id)
+
             self._initial_balance = account_info.get('net_liquidation', 0.0)
+            update_position_risk("portfolio", self._initial_balance)
 
             self._connected = True
-            logger.info("✅ Paper trader connected to Tiger API")
+            logger.info("Paper trader connected to Tiger API")
             logger.info(f"   Account: {self.account_id}")
             logger.info(f"   Initial balance: ${self._initial_balance:,.2f}")
             return True
 
         except Exception as e:
-            logger.error(f"❌ Failed to connect paper trader: {e}")
+            logger.error(f"Failed to connect paper trader: {e}")
             raise  # trigger tenacity retry
 
     def disconnect(self) -> None:
@@ -217,8 +222,11 @@ class PaperTrader:
             raise RuntimeError("Not connected")
 
         try:
-            info = self._trade_client.get_account_info(self.account_id)
-            positions = self._trade_client.get_positions(self.account_id)
+            from .metrics import measure_latency
+            with measure_latency("get_account_info"):
+                info = self._trade_client.get_account_info(self.account_id)
+            with measure_latency("get_positions"):
+                positions = self._trade_client.get_positions(self.account_id)
 
             summary = {
                 'account_id': self.account_id,
@@ -313,35 +321,41 @@ class PaperTrader:
         )
 
         try:
-            contract = Contract()
-            contract.symbol = symbol
-            contract.sec_type = "STK"
-            contract.exchange = "US" if SANDBOX_MODE else "US"
+            from .metrics import measure_latency
+            with measure_latency("place_order"):
+                contract = Contract()
+                contract.symbol = symbol
+                contract.sec_type = "STK"
+                contract.exchange = "US" if SANDBOX_MODE else "US"
 
-            tiger_order = Order()
-            tiger_order.account = self.account_id
-            tiger_order.contract = contract
-            tiger_order.order_type = order_type.value
-            tiger_order.quantity = quantity
+                tiger_order = Order()
+                tiger_order.account = self.account_id
+                tiger_order.contract = contract
+                tiger_order.order_type = order_type.value
+                tiger_order.quantity = quantity
 
-            if limit_price is not None:
-                tiger_order.limit_price = limit_price
-            if stop_price is not None:
-                tiger_order.stop_price = stop_price
+                if limit_price is not None:
+                    tiger_order.limit_price = limit_price
+                if stop_price is not None:
+                    tiger_order.stop_price = stop_price
 
-            tiger_order.action = side.value
+                tiger_order.action = side.value
 
-            tiger_order_id = self._trade_client.place_order(tiger_order)
+                tiger_order_id = self._trade_client.place_order(tiger_order)
+
             order.tiger_order_id = tiger_order_id
             order.status = OrderStatus.PENDING
 
             self._orders[order.id] = order
-            logger.info(f"📤 Order placed: {side.value} {quantity} {symbol} "
+            # Emit metrics: order placed
+            increment_trade(side=side.value, status="placed")
+
+            logger.info(f"Order placed: {side.value} {quantity} {symbol} "
                        f"({order_type.value}) - ID: {tiger_order_id}")
             return order
 
         except Exception as e:
-            logger.error(f"❌ Order placement failed: {e}")
+            logger.error(f"Order placement failed: {e}")
             order.status = OrderStatus.REJECTED
             self._orders[order.id] = order
             raise
@@ -366,12 +380,14 @@ class PaperTrader:
             return False
 
         try:
-            self._trade_client.cancel_order(order.tiger_order_id)
+            from .metrics import measure_latency
+            with measure_latency("cancel_order"):
+                self._trade_client.cancel_order(order.tiger_order_id)
             order.status = OrderStatus.CANCELLED
-            logger.info(f"🗑️ Order cancelled: {order_id}")
+            logger.info(f"Order cancelled: {order_id}")
             return True
         except Exception as e:
-            logger.error(f"❌ Cancel failed for {order_id}: {e}")
+            logger.error(f"Cancel failed for {order_id}: {e}")
             raise
 
     def update_order(self, tiger_order_id: str, status: str, filled_qty: int, avg_price: float) -> None:
@@ -407,7 +423,11 @@ class PaperTrader:
         Args:
             order (OrderRecord): The filled order record.
         """
-        logger.info(f"✅ Order filled: {order.symbol} {order.quantity} @ ${order.avg_fill_price:.2f}")
+        logger.info(f"Order filled: {order.symbol} {order.quantity} @ ${order.avg_fill_price:.2f}")
+
+        # Emit metrics
+        increment_trade(side=order.side.value, status="filled")
+        from .metrics import set_portfolio_value
 
         symbol = order.symbol
         if symbol not in self._positions:
@@ -426,15 +446,24 @@ class PaperTrader:
             pos.quantity = total_quantity
             pos.avg_cost = total_cost / total_quantity if total_quantity > 0 else 0
             pos.side = OrderSide.BUY
+
+            # Update risk metric for long position (value = quantity * price)
+            position_value = pos.quantity * order.avg_fill_price
+            update_position_risk(symbol, position_value)
         else:
             pos.quantity -= order.quantity
             if pos.quantity <= 0:
                 realized_pnl = (order.avg_fill_price - pos.avg_cost) * order.quantity
                 self._daily_pnl += realized_pnl
-                logger.info(f"💰 Position closed: {symbol} P&L: ${realized_pnl:.2f}")
+                logger.info(f"Position closed: {symbol} P&L: ${realized_pnl:.2f}")
+                clear_position_risk(symbol)
                 if pos.quantity == 0:
                     self._positions.pop(symbol, None)
                     return
+            else:
+                # Position reduced; update risk with remaining quantity
+                position_value = pos.quantity * order.avg_fill_price
+                update_position_risk(symbol, position_value)
 
         pos.current_price = order.avg_fill_price
         pos.update_price(order.avg_fill_price)

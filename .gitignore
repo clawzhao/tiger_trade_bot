@@ -25,6 +25,10 @@ coverage.xml
 *.swp
 *.swo
 
+# Node.js
+node_modules/
+**/node_modules/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -33,3 +37,8 @@ Thumbs.db
 logs/*.log
 config.local.py
 *.env
+
+# Database
+*.db
+*.sqlite
+*.sqlite3

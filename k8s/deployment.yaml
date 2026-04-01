@@ -1,0 +1,118 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiger-trade-bot
+  labels:
+    app: tiger-trade-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tiger-trade-bot
+  template:
+    metadata:
+      labels:
+        app: tiger-trade-bot
+    spec:
+      containers:
+      - name: tiger-trade-bot
+        image: ${DOCKER_IMAGE:-clawzhao/tiger_trade_bot:latest}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: health
+          containerPort: 8080
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        - name: TIGER_ID
+          valueFrom:
+            secretKeyRef:
+              name: tiger-trade-bot-secret
+              key: tiger-id
+        - name: ACCOUNT_ID
+          valueFrom:
+            secretKeyRef:
+              name: tiger-trade-bot-secret
+              key: account-id
+        - name: PRIVATE_KEY_PATH
+          value: "/etc/keys/rsa_private_key.pem"
+        - name: SANDBOX_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: tiger-trade-bot-config
+              key: SANDBOX_MODE
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: tiger-trade-bot-config
+              key: LOG_LEVEL
+        - name: LOG_DIR
+          valueFrom:
+            configMapKeyRef:
+              name: tiger-trade-bot-config
+              key: LOG_DIR
+        - name: HEALTH_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: tiger-trade-bot-config
+              key: HEALTH_PORT
+        - name: METRICS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: tiger-trade-bot-config
+              key: METRICS_PORT
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: tiger-trade-bot-config
+              key: DATABASE_URL
+        volumeMounts:
+        - name: keys-volume
+          mountPath: /etc/keys
+          readOnly: true
+        - name: logs-volume
+          mountPath: /var/log/tiger_bot
+        - name: data-volume
+          mountPath: /data
+          subPathExpr: $( POD_NAMESPACE )
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 2
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+      volumes:
+      - name: keys-volume
+        secret:
+          secretName: tiger-trade-bot-secret
+          items:
+          - key: rsa-private-key
+            path: rsa_private_key.pem
+      - name: logs-volume
+        emptyDir: {}
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: tiger-trade-bot-data

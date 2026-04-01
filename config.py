@@ -50,6 +50,14 @@ except ImportError:
     pass
 
 
+# Web Server (Health & Metrics)
+HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8080"))
+METRICS_PORT = int(os.environ.get("METRICS_PORT", "9090"))
+
+# Database
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./trades.db")
+
+
 # .env Validation
 def validate_config():
     missing = []

@@ -30,10 +30,12 @@ def test_place_order_success(mock_trade_client):
     trader = PaperTrader()
     trader.connect()
 
-    order = trader.place_order("AAPL", OrderSide.BUY, 10, OrderType.MARKET)
-    assert order.symbol == "AAPL"
-    assert order.status == OrderStatus.PENDING
-    assert order.tiger_order_id == "TIGER_123"
+    with patch("tiger_trade_bot.trader.increment_trade") as mock_increment:
+        order = trader.place_order("AAPL", OrderSide.BUY, 10, OrderType.MARKET)
+        assert order.symbol == "AAPL"
+        assert order.status == OrderStatus.PENDING
+        assert order.tiger_order_id == "TIGER_123"
+        mock_increment.assert_called_once_with(side="BUY", status="placed")
 
 
 def test_place_order_validation_fail(mock_trade_client):
@@ -72,3 +74,22 @@ def test_get_positions_caching(mock_trade_client):
     # Call 3: With cache (should not increment call_count on tiger API)
     pos3 = trader.get_positions(use_cache=True)
     assert mock_instance.get_positions.call_count == 2
+
+
+def test_order_fill_triggers_metrics(mock_trade_client):
+    """Test that order fill updates risk metric and increments trade counter."""
+    mock_instance = mock_trade_client.return_value
+    mock_instance.get_account_info.return_value = {"net_liquidation": 100000.0}
+    trader = PaperTrader()
+    trader.connect()
+
+    with patch("tiger_trade_bot.trader.increment_trade") as mock_increment, \
+         patch("tiger_trade_bot.trader.update_position_risk") as mock_risk:
+        # Simulate order fill via update_order
+        order = trader.place_order("AAPL", OrderSide.BUY, 10, OrderType.MARKET)
+        trader.update_order(order.tiger_order_id, "FILLED", 10, 150.0)
+
+        # Check trade incremented with filled status
+        mock_increment.assert_called_with(side="BUY", status="filled")
+        # Risk should be updated for the position
+        mock_risk.assert_called()
