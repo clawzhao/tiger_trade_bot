@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 def test_default_config_values():
     """Test that default config values are set when env vars not provided."""
-    import tiger_trade_bot.config as config_mod
+    import config as config_mod
     # These defaults are from config.py when env not set
     # Note: TIGER_ID and ACCOUNT_ID default to placeholder strings; they are required
     assert config_mod.TIGER_ID == "YOUR_TIGER_ID" or config_mod.TIGER_ID is None
@@ -39,7 +39,7 @@ def test_env_override(monkeypatch):
     monkeypatch.setenv("DAILY_LOSS_LIMIT", "1000")
 
     # Reload config module to pick up new env vars
-    import tiger_trade_bot.config as config_mod
+    import config as config_mod
     importlib.reload(config_mod)
 
     assert config_mod.TIGER_ID == "TEST_TIGER_123"

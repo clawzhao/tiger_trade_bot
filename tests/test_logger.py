@@ -4,6 +4,7 @@ Tests for structured JSON logger.
 
 import json
 import logging
+import sys
 from io import StringIO
 
 from tiger_trade_bot.logger import JsonFormatter, setup_logging
@@ -52,6 +53,7 @@ def test_json_formatter_with_exception():
     try:
         raise ValueError("test error")
     except ValueError:
+        exc_info = sys.exc_info()
         record = logging.LogRecord(
             name="test.logger",
             level=logging.ERROR,
@@ -59,7 +61,7 @@ def test_json_formatter_with_exception():
             lineno=10,
             msg="Error occurred",
             args=(),
-            exc_info=True,  # Simulate logging.exception
+            exc_info=exc_info,
         )
 
     output = formatter.format(record)

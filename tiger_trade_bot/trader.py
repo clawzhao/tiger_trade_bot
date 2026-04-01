@@ -22,7 +22,8 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from tigeropen.tiger_open_config import TigerOpenClientConfig
 from tigeropen.common.util.signature_utils import read_private_key
 from tigeropen.trade.trade_client import TradeClient
-from tigeropen.trade.model import Order, Contract
+from tigeropen.trade.domain.order import Order
+from tigeropen.trade.domain.contract import Contract
 
 from config import (
     TIGER_ID, ACCOUNT_ID, PRIVATE_KEY_PATH, SANDBOX_MODE,

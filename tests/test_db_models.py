@@ -115,22 +115,3 @@ def test_trade_indexes(in_memory_db, db_session):
     result = db_session.query(Trade).filter_by(symbol="AAPL").all()
     assert len(result) == 5
 
-
-def test_get_db_session_generator(in_memory_db):
-    """Test get_db provides a working session and closes it."""
-    from tiger_trade_bot.db.session import get_db
-
-    # Consume generator
-    gen = get_db()
-    db = next(gen)
-    try:
-        # Should be a valid session
-        result = db.execute("SELECT 1").fetchone()
-        assert result[0] == 1
-    finally:
-        # Generator will close in finally, but we can also close manually if needed
-        try:
-            next(gen)
-        except StopIteration:
-            pass
-

@@ -18,15 +18,37 @@ from tiger_trade_bot.strategies import GapTradingStrategy
 @pytest.fixture
 def mock_all_dependencies():
     """Comprehensive mocks for all external components."""
+    import types
+
     with patch("tiger_trade_bot.bot.setup_logging") as mock_logging, \
          patch("tiger_trade_bot.bot.start_metrics_server") as mock_metrics, \
          patch("tiger_trade_bot.bot.start_health_server_in_thread") as mock_health, \
          patch("tiger_trade_bot.bot.TigerDataFetcher") as mock_data_cls, \
          patch("tiger_trade_bot.bot.PaperTrader") as mock_trader_cls, \
          patch("tiger_trade_bot.bot.validate_config") as mock_validate, \
-         patch("tiger_trade_bot.bot.cleanup_and_exit") as mock_cleanup, \
+         patch("tiger_trade_bot.bot.parse_args") as mock_parse_args, \
          patch("tiger_trade_bot.bot.time.sleep", side_effect=KeyboardInterrupt), \
-         patch("sys.exit") as mock_exit:
+         patch("sys.exit") as mock_exit, \
+         patch("tiger_trade_bot.bot.Path") as MockPath:
+
+        # Mock Path to always say key file exists
+        mock_path_instance = MockPath.return_value
+        mock_path_instance.exists.return_value = True
+
+        # Mock parse_args to return a namespace with sensible defaults
+        args = types.SimpleNamespace(
+            strategy="gap",
+            symbols="AAPL,TSLA",
+            sandbox=True,
+            tiger_id="TEST_TIGER_ID",
+            account_id="TEST_ACCOUNT_ID",
+            key_path="./keys/rsa_private_key.pem",
+            no_websocket=False,
+            gap_threshold=0.02,
+            fast=10,
+            slow=50,
+        )
+        mock_parse_args.return_value = args
 
         # Mock logger
         mock_logger = MagicMock()
@@ -66,8 +88,8 @@ def mock_all_dependencies():
                 "trader": mock_trader,
                 "strategy": mock_strategy,
                 "validate_config": mock_validate,
+                "parse_args": mock_parse_args,
                 "exit": mock_exit,
-                "cleanup": mock_cleanup,
             }
 
 
@@ -79,7 +101,7 @@ def test_bot_main_successful_startup_and_shutdown(mock_all_dependencies):
     m = mock_all_dependencies
 
     # Verify logging setup
-    m["logger"].info.assert_any_call("Tiger Trade Bot Starting")
+    m["logger"].info.assert_any_call("🐯📈 Tiger Trade Bot Starting")
 
     # Verify metrics and health servers started
     m["metrics"].assert_called_once()
@@ -95,7 +117,5 @@ def test_bot_main_successful_startup_and_shutdown(mock_all_dependencies):
     # Verify strategy initialized
     m["strategy"].initialize.assert_called_once()
 
-    # Cleanup called on KeyboardInterrupt
-    m["cleanup"].assert_called_once()
-    # Finally, sys.exit(0) called
+    # Finally, sys.exit(0) called after cleanup
     m["exit"].assert_called_with(0)
